@@ -38,7 +38,8 @@
 	  socket,
 	  parent,
 	  log_fun,
-	  data
+	  data,
+	  waiting = 0
 	 }).
 
 -define(SECURE_CONNECTION, 32768).
@@ -125,10 +126,20 @@ loop(State) ->
     Sock = State#state.socket,
     receive
 	{tcp, Sock, InData} ->
-	    NewData = list_to_binary([State#state.data, InData]),
-	    %% send data to parent if we have enough data
-	    Rest = sendpacket(State#state.parent, NewData),
-	    loop(State#state{data = Rest});
+	    PrevData = State#state.data,
+	    NewData = <<PrevData/binary, InData/binary>>,
+	    {Rest, Waiting} = case State#state.waiting of
+		0 ->
+		    sendpacket(State#state.parent, NewData);
+		N ->
+		    if
+			N =< size(InData) ->
+			    sendpacket(State#state.parent, NewData);
+			true ->
+			    {NewData, N - size(InData)}
+		    end
+	    end,
+	    loop(State#state{data = Rest, waiting = Waiting});
 	{tcp_error, Sock, Reason} ->
 	    LogFun = State#state.log_fun,
 	    LogFun(?MODULE, ?LINE, error,
@@ -166,8 +177,8 @@ sendpacket(Parent, Data) ->
 		    Parent ! {mysql_recv, self(), data, Packet, Num},
 		    sendpacket(Parent, Rest);
 		true ->
-		    Data
+		    {Data, Length - size(D)}
 	    end;
 	_ ->
-	    Data
+	    {Data, 0}
     end.
