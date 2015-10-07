@@ -1,3 +1,4 @@
+%%% vim: noet ts=8 sts=4 sw=4
 %%%-------------------------------------------------------------------
 %%% File    : mysql_conn.erl
 %%% Author  : Fredrik Thulin <ft@it.su.se>
@@ -263,7 +264,9 @@ do_recv(LogFun, RecvPid, SeqNum)  when is_function(LogFun);
 				       LogFun == undefined,
 				       SeqNum == undefined ->
     receive
-        {mysql_recv, RecvPid, data, Packet, Num} ->
+	{mysql_recv, RecvPid, data, Packet, Num} when size(Packet) == 16#ffffff ->
+	    do_recv_more(LogFun, RecvPid, Packet, Num);
+	{mysql_recv, RecvPid, data, Packet, Num} ->
 	    {ok, Packet, Num};
 	{mysql_recv, RecvPid, closed, _E} ->
 	    {error, io_lib:format("mysql_recv: socket was closed ~p", [_E])}
@@ -271,10 +274,18 @@ do_recv(LogFun, RecvPid, SeqNum)  when is_function(LogFun);
 do_recv(LogFun, RecvPid, SeqNum) when is_function(LogFun);
 				      LogFun == undefined,
 				      is_integer(SeqNum) ->
+    do_recv_more(LogFun, RecvPid, <<>>, SeqNum).
+
+do_recv_more(LogFun, RecvPid, Partial, SeqNum) when is_function(LogFun);
+						    LogFun == undefined,
+						    is_binary(Partial),
+						    is_integer(SeqNum) ->
     ResponseNum = SeqNum + 1,
     receive
-        {mysql_recv, RecvPid, data, Packet, ResponseNum} ->
-	    {ok, Packet, ResponseNum};
+	{mysql_recv, RecvPid, data, Packet, ResponseNum} when size(Packet) == 16#ffffff ->
+	    do_recv_more(LogFun, RecvPid, <<Partial/binary, Packet/binary>>, ResponseNum);
+	{mysql_recv, RecvPid, data, Packet, ResponseNum} ->
+	    {ok, <<Partial/binary, Packet/binary>>, ResponseNum};
 	{mysql_recv, RecvPid, closed, _E} ->
 	    {error, io_lib:format("mysql_recv: socket was closed ~p", [_E])}
     end.
@@ -832,7 +843,8 @@ get_lcb(<<252:8, Value:16/little, Rest/binary>>) ->
     {Value, Rest};
 get_lcb(<<253:8, Value:24/little, Rest/binary>>) ->
     {Value, Rest};
-get_lcb(<<254:8, Value:32/little, Rest/binary>>) ->
+% for MySQL 3.23 or later, after a 0xfe the length is 8 bytes long
+get_lcb(<<254:8, Value:64/little, Rest/binary>>) ->
     {Value, Rest};
 get_lcb(<<Value:8, Rest/binary>>) when Value < 251 ->
     {Value, Rest};
